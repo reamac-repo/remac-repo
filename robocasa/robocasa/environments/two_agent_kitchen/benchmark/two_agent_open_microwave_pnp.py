@@ -1,0 +1,94 @@
+from robocasa.environments.two_agent_kitchen.two_agent_kitchen import *
+
+
+class TwoAgentOpenMicrowavePnP(TwoAgentKitchen):
+    EXCLUDE_LAYOUTS = [8]
+    def __init__(
+        self, 
+        obj_groups="vegetable", 
+        exclude_obj_groups=None,
+        *args, 
+        **kwargs
+    ):
+        # kwargs["layout_ids"] = random.choice([1, 3, 6, 9])
+        # layout_ids = 1, 3, 6, 9 means that the vegetable is always on the right of microwave
+        kwargs["layout_ids"] = [0, 10]
+        self.obj_groups = obj_groups
+        self.exclude_obj_groups = exclude_obj_groups
+        super().__init__(*args, **kwargs)
+    
+    def _setup_kitchen_references(self):
+        super()._setup_kitchen_references()
+        self.sink = self.register_fixture_ref("sink", dict(id=FixtureType.SINK))
+        self.microwave = self.register_fixture_ref(
+            "microwave", dict(id=FixtureType.MICROWAVE),
+        )
+        self.counter = self.register_fixture_ref(
+            "counter", dict(id=FixtureType.COUNTER, ref=self.microwave),
+        )
+        self.init_robot_base_pos = []
+        self.init_robot_base_pos.append(self.microwave)
+        self.init_robot_base_pos.append(self.sink)
+    
+    def _reset_internal(self):
+        """
+        Resets simulation internal configurations.
+        """
+        super()._reset_internal()
+        self.microwave.set_door_state(min=0.0, max=0.02, env=self, rng=self.rng) # door is closed initially
+
+    def get_ep_meta(self):
+        ep_meta = super().get_ep_meta()
+        # obj_lang = self.get_obj_lang(obj_name="vegetable")
+        ep_meta["lang"] = f"pick up vegetable from counter and place it to the microwave"
+        return ep_meta
+    
+    def _get_obj_cfgs(self):
+        cfgs = []
+
+        cfgs.append(dict(
+            name="vegetable",
+            obj_groups=("carrot"),
+            exclude_obj_groups=self.exclude_obj_groups,
+            graspable=True, microwavable=True,
+            placement=dict(
+                fixture=self.counter, # counter
+                sample_region_kwargs=dict(
+                    ref=self.microwave,
+                    # TODO: loc="right"
+                ),
+                size=(0.30, 0.30),
+                pos=("ref", -1.0),
+                try_to_place_in="container",
+            ),
+        ))
+        cfgs.append(dict(
+            name="container",
+            obj_groups=("plate_color"),
+            placement=dict(
+                fixture=self.microwave,
+                size=(0.05, 0.05),
+                ensure_object_boundary_in_range=False,
+            ),
+        ))
+
+        return cfgs
+
+    def _check_success(self):
+        obj = self.objects["vegetable"]
+        container = self.objects["container"]
+        door_state = self.microwave.get_door_state(env=self)
+        
+        task0_success = True
+        for joint_p in door_state.values():
+            if joint_p < 0.90:
+                task0_success = False
+                break
+
+        obj_container_contact = self.check_contact(obj, container)
+        container_micro_contact = self.check_contact(container, self.microwave)
+        gripper_obj_far = OU.gripper_obj_far(self, obj_name="vegetable")
+        task1_success =  obj_container_contact and container_micro_contact and gripper_obj_far # return a list maybe work
+
+        task_success = task0_success and task1_success
+        return {'task': task_success, 'task0': task0_success, 'task1': task1_success}
